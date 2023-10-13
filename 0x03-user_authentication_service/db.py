@@ -1,97 +1,80 @@
 #!/usr/bin/env python3
+"""DB module.
 """
-Database nodule
-"""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, tuple_
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.orm.session import Session
+
 from user import Base, User
 
 
 class DB:
-    """ Model Data Base """
+    """DB class.
+    """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize a new DB instance.
+        """
         self._engine = create_engine("sqlite:///a.db", echo=False)
         Base.metadata.drop_all(self._engine)
         Base.metadata.create_all(self._engine)
         self.__session = None
 
     @property
-    def _session(self):
-        """ Make sessions """
+    def _session(self) -> Session:
+        """Memoized session object.
+        """
         if self.__session is None:
             DBSession = sessionmaker(bind=self._engine)
             self.__session = DBSession()
-
         return self.__session
 
     def add_user(self, email: str, hashed_password: str) -> User:
+        """Adds a new user to the database.
         """
-            Make a new user
-
-            Args:
-                email: Text email
-                hashed_password: Password hashed
-
-            Return:
-                User created
-        """
-        new_user = User(email=email, hashed_password=hashed_password)
-        self._session.add(new_user)
-        self._session.commit()
-
+        try:
+            new_user = User(email=email, hashed_password=hashed_password)
+            self._session.add(new_user)
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            new_user = None
         return new_user
 
     def find_user_by(self, **kwargs) -> User:
+        """Finds a user based on a set of filters.
         """
-            Find user based in composition of your features
-
-            Args:
-                kwargs: Arbitrary dict with features
-
-            Return:
-                User found or error name
-        """
-        if not kwargs:
-            raise InvalidRequestError
-
-        cols_keys = User.__table__.columns.keys()
-        for key in kwargs.keys():
-            if key not in cols_keys:
-                raise InvalidRequestError
-
-        users = self._session.query(User).filter_by(**kwargs).first()
-
-        if users is None:
-            raise NoResultFound
-
-        return users
+        fields, values = [], []
+        for key, value in kwargs.items():
+            if hasattr(User, key):
+                fields.append(getattr(User, key))
+                values.append(value)
+            else:
+                raise InvalidRequestError()
+        result = self._session.query(User).filter(
+            tuple_(*fields).in_([tuple(values)])
+        ).first()
+        if result is None:
+            raise NoResultFound()
+        return result
 
     def update_user(self, user_id: int, **kwargs) -> None:
+        """Updates a user based on a given id.
         """
-            Update user in the database
-
-            Args:
-                user_id: Id to find and modify user
-                kwargs: Arbitrary dict with features
-
-            Return:
-                None
-        """
-        if not kwargs:
-            return None
-
         user = self.find_user_by(id=user_id)
-
-        cols_keys = User.__table__.columns.keys()
-        for key in kwargs.keys():
-            if key not in cols_keys:
-                raise ValueError
-
+        if user is None:
+            return
+        update_source = {}
         for key, value in kwargs.items():
-            setattr(user, key, value)
-
+            if hasattr(User, key):
+                update_source[getattr(User, key)] = value
+            else:
+                raise ValueError()
+        self._session.query(User).filter(User.id == user_id).update(
+            update_source,
+            synchronize_session=False,
+        )
         self._session.commit()
